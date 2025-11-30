@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tuition Timetable Manager — Digital SM Activity</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#9aa4b2;--accent:#5eead4;--accent-2:#7c3aed}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,-apple-system,"Helvetica Neue",Arial;background:linear-gradient(180deg,#071024 0%, #07182a 60%);color:#e6eef6;min-height:100vh;padding:18px}
+    .app{max-width:1100px;margin:0 auto}
+    header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+    header h1{font-size:20px;margin:0}
+    .controls{display:flex;gap:12px;flex-wrap:wrap}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:12px;border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,0.6);}
+    input,select,button{font-size:14px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit}
+    button{cursor:pointer}
+    .layout{display:grid;grid-template-columns:1fr 340px;gap:16px}
+    .timetable{overflow:auto}
+    table{border-collapse:collapse;width:100%;min-width:700px}
+    th,td{padding:8px;border:1px solid rgba(255,255,255,0.04);text-align:center}
+    th{background:rgba(255,255,255,0.03);font-weight:600}
+    .timeslot{width:120px;text-align:left;padding-left:12px}
+    .cell{min-height:48px;position:relative}
+    .teacher-pill{display:inline-block;padding:6px 8px;border-radius:999px;font-size:13px;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#021017}
+    .assign-btn{position:absolute;right:6px;top:6px;opacity:0.85}
+    .present{outline:3px solid rgba(94,234,212,0.12)}
+    .absent{opacity:0.45}
+    .sidebar .section{margin-bottom:12px}
+    .teachers-list{display:flex;flex-direction:column;gap:6px}
+    .teacher-item{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .summary{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+    .summary-row{display:flex;justify-content:space-between;align-items:center;padding:6px;border-radius:8px;background:rgba(255,255,255,0.02)}
+    .muted{color:var(--muted);font-size:13px}
+    footer{margin-top:18px;text-align:center;color:var(--muted);font-size:13px}
+    @media (max-width:980px){.layout{grid-template-columns:1fr}table{min-width:640px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="card">
+        <h1>Tuition Timetable Manager</h1>
+        <div class="muted">Manage weekly slots, assign teachers, mark attendance & view counts</div>
+      </div>
+    </header>
+
+    <div class="controls" style="margin-bottom:12px;">
+      <div class="card">
+        <label class="muted">Pick week (any date inside week):</label>
+        <input type="date" id="weekDate" />
+      </div>
+
+      <div class="card">
+        <label class="muted">Add teacher</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="newTeacher" placeholder="Teacher name" />
+          <button id="addTeacher">Add</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <label class="muted">Add timeslot</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="newSlot" placeholder="eg. 4:00-5:00" />
+          <button id="addSlot">Add</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <label class="muted">Actions</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="clearAll">Reset</button>
+          <button id="export">Export JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div>
+        <div class="card timetable">
+          <table id="timetableTable">
+            <!-- generated -->
+          </table>
+        </div>
+
+        <div class="card" style="margin-top:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div class="muted">Selected teacher:</div>
+          <select id="selectedTeacher"></select>
+          <div class="muted">(Click a cell to assign selected teacher)</div>
+          <div style="margin-left:auto" class="muted">Click teacher-pill inside cell to toggle attendance for chosen date</div>
+        </div>
+      </div>
+
+      <aside class="sidebar card">
+        <div class="section">
+          <div class="muted">Teachers</div>
+          <div class="teachers-list" id="teachersList"></div>
+        </div>
+
+        <div class="section">
+          <div class="muted">Attendance date</div>
+          <input type="date" id="attDate" />
+          <div class="muted" style="margin-top:6px">(Mark presence for this date)</div>
+        </div>
+
+        <div class="section">
+          <div class="muted">Summary — Selected week</div>
+          <div id="summary" class="summary"></div>
+        </div>
+
+      </aside>
+    </div>
+
+    <footer class="muted">Save is automatic (localStorage). Export to save backup.</footer>
+  </div>
+
+  <script>
+    // Simple timetable manager
+    const STORAGE = {
+      teachers: 'ts_teachers_v1',
+      slots: 'ts_slots_v1',
+      assignments: 'ts_assign_v1', // structure: {weekKey: {slotIndex: {dayIndex: teacherId}}}
+      attendance: 'ts_att_v1' // structure: {dateISO: {cellKey: true}} where cellKey = slotIndex + '|' + dayIndex
+    }
+
+    const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+    // state
+    let teachers = [] // {id,name}
+    let slots = [] // ['4:00-5:00', ...]
+    let assignments = {} // keyed by weekStartISO
+    let attendance = {}
+
+    // elements
+    const weekDate = document.getElementById('weekDate')
+    const timetableTable = document.getElementById('timetableTable')
+    const teachersList = document.getElementById('teachersList')
+    const selectedTeacher = document.getElementById('selectedTeacher')
+    const newTeacher = document.getElementById('newTeacher')
+    const addTeacher = document.getElementById('addTeacher')
+    const newSlot = document.getElementById('newSlot')
+    const addSlot = document.getElementById('addSlot')
+    const attDate = document.getElementById('attDate')
+    const summary = document.getElementById('summary')
+    const clearAll = document.getElementById('clearAll')
+    const exportBtn = document.getElementById('export')
+
+    // util
+    function uid(){return 't'+Math.random().toString(36).slice(2,9)}
+    function isoDate(dt){return new Date(dt.getFullYear(),dt.getMonth(),dt.getDate()).toISOString().slice(0,10)}
+
+    function getWeekStart(dateISO){
+      const d = new Date(dateISO)
+      const day = (d.getDay()+6)%7 // Mon=0
+      d.setDate(d.getDate()-day)
+      return isoDate(d)
+    }
+
+    // persistence
+    function load(){
+      teachers = JSON.parse(localStorage.getItem(STORAGE.teachers) || '[]')
+      slots = JSON.parse(localStorage.getItem(STORAGE.slots) || '[]')
+      assignments = JSON.parse(localStorage.getItem(STORAGE.assignments) || '{}')
+      attendance = JSON.parse(localStorage.getItem(STORAGE.attendance) || '{}')
+
+      if(!slots.length){ // default slots
+        slots = ['4:00-5:00','5:00-6:00','6:00-7:00']
+      }
+
+      if(!teachers.length){
+        teachers = [ {id:uid(),name:'Teacher A'}, {id:uid(),name:'Teacher B'} ]
+      }
+
+      // set default dates
+      const today = new Date()
+      weekDate.value = isoDate(today)
+      attDate.value = isoDate(today)
+
+      save()
+    }
+    function save(){
+      localStorage.setItem(STORAGE.teachers, JSON.stringify(teachers))
+      localStorage.setItem(STORAGE.slots, JSON.stringify(slots))
+      localStorage.setItem(STORAGE.assignments, JSON.stringify(assignments))
+      localStorage.setItem(STORAGE.attendance, JSON.stringify(attendance))
+    }
+
+    // rendering
+    function renderTeachers(){
+      teachersList.innerHTML = ''
+      selectedTeacher.innerHTML = ''
+      teachers.forEach(t=>{
+        const div = document.createElement('div'); div.className='teacher-item'
+        div.innerHTML = `<div>${t.name}</div><div style=\"display:flex;gap:6px\"><button data-id=\"${t.id}\" class=\"rename\">✏️</button><button data-id=\"${t.id}\" class=\"del\">🗑️</button></div>`
+        teachersList.appendChild(div)
+        const opt = document.createElement('option'); opt.value=t.id; opt.textContent = t.name; selectedTeacher.appendChild(opt)
+      })
+      // events
+      document.querySelectorAll('.rename').forEach(b=>b.onclick=()=>{
+        const id=b.dataset.id; const t=teachers.find(x=>x.id===id); const newName = prompt('Rename teacher', t.name)
+        if(newName){ t.name=newName; save(); renderTeachers(); renderTable(); renderSummary(); }
+      })
+      document.querySelectorAll('.del').forEach(b=>b.onclick=()=>{
+        const id=b.dataset.id; if(!confirm('Delete teacher? This removes assignments.')) return;
+        teachers = teachers.filter(x=>x.id!==id)
+        // purge assignments
+        Object.keys(assignments).forEach(wk=>{
+          slots.forEach((s,si)=>{
+            if(assignments[wk] && assignments[wk][si]){
+              days.forEach(di=>{})
+            }
+          })
+        })
+        // remove any assignment references
+        for(const wk in assignments){
+          slots.forEach((_,si)=>{
+            if(!assignments[wk][si]) return
+            for(const di in assignments[wk][si]){
+              if(assignments[wk][si][di]===id) assignments[wk][si][di]=null
+            }
+          })
+        }
+        save(); renderTeachers(); renderTable(); renderSummary();
+      })
+    }
+
+    function renderTable(){
+      const wk = getWeekStart(weekDate.value)
+      const weekAssign = assignments[wk] || {}
+
+      // header
+      let html = '<thead><tr><th class="timeslot">Time</th>'
+      const weekDates = []
+      for(let i=0;i<7;i++){
+        const d = new Date(wk); d.setDate(d.getDate()+i); const iso = isoDate(d); weekDates.push(iso)
+        html += `<th>${days[i]}<div class=\"muted\">${iso}</div></th>`
+      }
+      html += '</tr></thead>'
+
+      html += '<tbody>'
+      slots.forEach((slot,si)=>{
+        html += `<tr><td class="timeslot">${slot}</td>`
+        for(let di=0;di<7;di++){
+          const assignedId = (weekAssign[si] && weekAssign[si][di]) || null
+          const teacher = teachers.find(t=>t.id===assignedId)
+          const cellKey = si+'|'+di
+          const isPresent = attendance[attDate.value] && attendance[attDate.value][cellKey]
+          html += `<td class="cell" data-si="${si}" data-di="${di}" data-cellkey="${cellKey}">`+
+                    `${teacher?`<span class=\"teacher-pill\" data-tid=\"${teacher.id}\">${teacher.name}</span>`:'<span class="muted">—</span>'}`+
+                    `<button class=\"assign-btn\">Assign</button>`+
+                  `</td>`
+        }
+        html += '</tr>'
+      })
+      html += '</tbody>'
+
+      timetableTable.innerHTML = html
+
+      // attach events
+      document.querySelectorAll('#timetableTable .cell').forEach(cell=>{
+        const si = cell.dataset.si|0; const di = cell.dataset.di|0; const cellKey = cell.dataset.cellkey
+        cell.onclick = (e)=>{
+          // if clicked on pill -> toggle attendance
+          if(e.target.classList && e.target.classList.contains('teacher-pill')){
+            const tid = e.target.dataset.tid
+            toggleAttendance(cellKey, tid)
+            return
+          }
+          if(e.target.classList && e.target.classList.contains('assign-btn')){
+            assignTeacherToCell(si,di)
+            return
+          }
+          // else assign too
+          assignTeacherToCell(si,di)
+        }
+        // visually mark present for selected date
+        if(attendance[attDate.value] && attendance[attDate.value][cellKey]){
+          cell.classList.add('present')
+        } else {
+          cell.classList.remove('present')
+        }
+
+      })
+    }
+
+    function assignTeacherToCell(si,di){
+      const tid = selectedTeacher.value
+      if(!tid){ alert('Select a teacher first') ; return }
+      const wk = getWeekStart(weekDate.value)
+      assignments[wk] = assignments[wk] || {}
+      assignments[wk][si] = assignments[wk][si] || {}
+      assignments[wk][si][di] = tid
+      save(); renderTable(); renderSummary();
+    }
+
+    function toggleAttendance(cellKey, teacherId){
+      if(!attDate.value){ alert('Pick attendance date'); return }
+      attendance[attDate.value] = attendance[attDate.value] || {}
+      attendance[attDate.value][cellKey] = attendance[attDate.value][cellKey] ? false : true
+      // store teacher link optionally
+      if(!attendance[attDate.value][cellKey]) delete attendance[attDate.value][cellKey]
+      save(); renderTable(); renderSummary();
+    }
+
+    function renderSummary(){
+      // compute counts for current week
+      const wk = getWeekStart(weekDate.value)
+      const weekStart = new Date(wk)
+      const counts = {}
+      teachers.forEach(t=>counts[t.id]=0)
+
+      for(let i=0;i<7;i++){
+        const d = new Date(weekStart); d.setDate(d.getDate()+i); const iso = isoDate(d)
+        const attForDay = attendance[iso] || {}
+        // for each cell that is present, find assigned teacher for that week
+        const weekAssign = assignments[wk] || {}
+        Object.keys(attForDay).forEach(cellKey=>{
+          const [si,di] = cellKey.split('|').map(x=>x|0)
+          const assigned = weekAssign[si] && weekAssign[si][di]
+          if(assigned) counts[assigned] = (counts[assigned]||0)+1
+        })
+      }
+
+      summary.innerHTML = ''
+      teachers.forEach(t=>{
+        const row = document.createElement('div'); row.className='summary-row'
+        row.innerHTML = `<div>${t.name}</div><div>${counts[t.id]||0} days</div>`
+        summary.appendChild(row)
+      })
+    }
+
+    // actions
+    addTeacher.onclick = ()=>{
+      const name = newTeacher.value.trim(); if(!name) return; teachers.push({id:uid(),name}); newTeacher.value=''; save(); renderTeachers(); renderTable(); renderSummary();
+    }
+    addSlot.onclick = ()=>{ const s=newSlot.value.trim(); if(!s) return; slots.push(s); newSlot.value=''; save(); renderTable(); renderSummary(); }
+
+    weekDate.onchange = ()=>{ renderTable(); renderSummary(); }
+    attDate.onchange = ()=>{ renderTable(); renderSummary(); }
+
+    clearAll.onclick = ()=>{
+      if(!confirm('Clear all data (teachers, slots, assignments, attendance)?')) return
+      localStorage.removeItem(STORAGE.teachers); localStorage.removeItem(STORAGE.slots); localStorage.removeItem(STORAGE.assignments); localStorage.removeItem(STORAGE.attendance)
+      teachers=[]; slots=[]; assignments={}; attendance={}; load(); renderTeachers(); renderTable(); renderSummary();
+    }
+
+    exportBtn.onclick = ()=>{
+      const data={teachers,slots,assignments,attendance}
+      const blob = new Blob([JSON.stringify(data,0,2)],{type:'application/json'})
+      const url = URL.createObjectURL(blob)
+      const a=document.createElement('a'); a.href=url; a.download='timetable-backup.json'; a.click(); URL.revokeObjectURL(url)
+    }
+
+    // init
+    load(); renderTeachers(); renderTable(); renderSummary();
+
+    // small UX: clicking teacher-pill toggles attendance for that cell for currently selected date
+    // also clicking a cell's assign button assigns selectedTeacher
+  </script>
+</body>
+</html>
